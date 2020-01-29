@@ -1,0 +1,15 @@
+<html>
+<head>
+    <title>Invalid HTML for tests</title>
+</head>
+<body>
+    <p this first paragraph is kinda broken but it shouldn't prevent us from pulling links out</p>
+    <a
+href="http://foo.bar.com/icky_whitespace" >it should work with icky whitespace</a>
+    <a href="http://foo.bar.com/nice_link">it should work with kind links</a>
+    <A hREf="http://foo.bar.com/CasingFun">it should work with links that have different cases</A>
+    <a>It should ignore weird a tags</a>
+    <a foo="bar">It should ignore weird a tags that have attributes</a>
+    <a href="mailto:someemail@foo.bar.com">it should work with email links <!-- no closing tag too for points! -->
+</body>
+</html>
