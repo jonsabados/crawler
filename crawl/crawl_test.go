@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -185,16 +186,27 @@ func Test_NewCrawler_HappyPath(t *testing.T) {
 
 	logger := zerolog.New(os.Stdout).Level(zerolog.Disabled)
 
+	// note - need more links than workers to make sure we don't end up blocking when publishing to the work queue
 	linkStructure := map[string][]string{
 		"start": {
 			"A",
 			"B",
 			"D",
+			"E",
+			"F",
+			"G",
+			"H",
+			"I",
+			"J",
+			"K",
+			"L",
+			"start",
 		},
 		"A": {
 			"B",
 			"C",
 			"Z",
+			"start",
 		},
 		"B": {
 			"C",
@@ -205,7 +217,16 @@ func Test_NewCrawler_HappyPath(t *testing.T) {
 		},
 	}
 
+	dupeRead := make(map[string]bool)
+	dupeReadLock := sync.Mutex{}
 	reader := func(ctx context.Context, url string) ([]string, error) {
+		dupeReadLock.Lock()
+		_, alreadyDone := dupeRead[url]
+		if alreadyDone {
+			asserter.Fail(fmt.Sprintf("duplicate read on %s", url))
+		}
+		dupeRead[url] = true
+		dupeReadLock.Unlock()
 		if url == "B" {
 			time.Sleep(time.Millisecond * 100)
 		}
@@ -220,7 +241,7 @@ func Test_NewCrawler_HappyPath(t *testing.T) {
 		return s != "W"
 	}
 
-	crawl, _ := NewCrawler(logger, 10, time.Second, reader, shouldIncludeMock)
+	crawl, _ := NewCrawler(logger, 3, time.Second, reader, shouldIncludeMock)
 
 	timedOut := make(chan bool)
 	go func() {
@@ -239,7 +260,16 @@ func Test_NewCrawler_HappyPath(t *testing.T) {
 				"B",
 				"C",
 				"D",
+				"E",
+				"F",
+				"G",
+				"H",
+				"I",
+				"J",
+				"K",
+				"L",
 				"Z",
+				"start",
 			}, res)
 			done <- true
 		}

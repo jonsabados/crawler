@@ -23,10 +23,27 @@ To execute unit tests one may run `make test`
 
 ## Running
 
-A binary, `crawl` will be produced in the `dist` directory after running make.
+A binary, `crawl` will be produced in the `dist` directory after running make. The usage of it is:
+
+```
+$ ./dist/crawl
+Usage of ./dist/crawl:
+  -executionTimeout int
+    	total execution timout, in seconds (default 120)
+  -readTimeout int
+    	http read timeout in milliseconds (per URL seen) (default 500)
+  -url string
+    	required - starting point for crawl and must be an http or https url. Only links on the same domain will be searched
+  -workers int
+    	how many workers to execute with (default 10)
+```
+
+## 
 
 ## areas for improvement
 
  * making use of link text (also requires knowing what to do if the link uses an image and so on)
  * doing more than just logging errors when parsing html
  * looking at content types of links
+ * idle worker pool monitoring stuff could probably be extracted
+ * log level could be made into an argument

@@ -66,7 +66,10 @@ func ReadDocument(ctx context.Context, url string) (strings []string, err error)
 		return nil, errors.WithStack(err)
 	}
 	defer res.Body.Close()
-	return parseLinks(ctx, res.Body), nil
+	zerolog.Ctx(ctx).Debug().Str("url", url).Msg("extracting urls")
+	ret := parseLinks(ctx, res.Body)
+	zerolog.Ctx(ctx).Debug().Str("url", url).Msg("done extracting urls")
+	return ret, nil
 }
 
 type URLEligibilityChecker func(url string) bool
@@ -95,10 +98,12 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 	stopSignal := make(chan bool)
 	return func(url string) ([]string, error) {
 		baseLogger.Debug().Str("url", url).Msg("starting crawl")
-		urlsSeen := make(map[string]bool)
+		urlsSeen := map[string]bool{
+			url: true,
+		}
 		urlsLock := sync.Mutex{}
 
-		urlsToProcess := make(chan string)
+		urlsToProcess := make(chan string, workerCount)
 
 		// we cant just use a wait group since workers are also feeding work. There may be a better way wait for them
 		// to all be done, but just waiting for them to be idle for .5 seconds seems like a good-enough solution for
@@ -128,23 +133,30 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 					// set a timeout so -meh-
 					readCtx, _ := context.WithTimeout(ctx, readTimeout)
 					docLinks, err := extractLinks(readCtx, u)
+					localLogger.Debug().Str("url", u).Msg("extracted links from url")
 					if err != nil {
 						// if we decorated the error with a stack it needs to go through fmt with a +v to spit the stack
 						// out, so no using .Err(err) here
 						localLogger.Warn().Str("error", fmt.Sprintf("%+v", err)).Str("url", u).Msg("error reading url")
 					} else {
 						for _, l := range docLinks {
+							localLogger.Debug().Str("url", l).Msg("checking url for inclusion")
 							if shouldIncludeURL(l) {
 								urlsLock.Lock()
 								_, seen := urlsSeen[l]
 								if !seen {
-									urlsToProcess <- l
+									// if workers aren't keeping up with the number of links we have seen things will deadlock
+									// so just do that in a separate goroutine
+									go func(toAdd string) {
+										urlsToProcess <- toAdd
+									}(l)
 									urlsSeen[l] = true
 								}
 								urlsLock.Unlock()
 							}
 						}
 					}
+					localLogger.Debug().Msg("marking idle")
 					idleMapLock.Lock()
 					idleMap[workerNo] = time.Now()
 					idleMapLock.Unlock()
