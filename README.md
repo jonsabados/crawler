@@ -29,3 +29,4 @@ A binary, `crawl` will be produced in the `dist` directory after running make.
 
  * making use of link text (also requires knowing what to do if the link uses an image and so on)
  * doing more than just logging errors when parsing html
+ * looking at content types of links
