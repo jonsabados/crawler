@@ -146,7 +146,8 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 								_, seen := urlsSeen[l]
 								if !seen {
 									// if workers aren't keeping up with the number of links we have seen things will deadlock
-									// so just do that in a separate goroutine
+									// so just do that in a separate goroutine. l can also be changed so it needs to be
+									// an argument to the func were invoking rather than just doing urlsToProcess <- l
 									go func(toAdd string) {
 										urlsToProcess <- toAdd
 									}(l)
@@ -164,6 +165,7 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 			}()
 		}
 
+		// fire up our workers - not just doing an arg-less go func() inline since i is gonna change immediately
 		for i := 0; i < workerCount; i++ {
 			idleMap[i] = time.Now()
 			startWorker(i)
