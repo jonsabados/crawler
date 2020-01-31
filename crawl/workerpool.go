@@ -6,25 +6,25 @@ import (
 )
 
 type idleWorkerTracker struct {
-	sync.Mutex
+	mutex sync.Mutex
 	idleMap map[int]time.Time
 }
 
 func (p *idleWorkerTracker) MarkBusy(workerNo int) {
-	p.Lock()
-	defer p.Unlock()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	delete(p.idleMap, workerNo)
 }
 
 func (p *idleWorkerTracker) MarkIdle(workerNo int) {
-	p.Lock()
-	defer p.Unlock()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	p.idleMap[workerNo] = time.Now()
 }
 
 func (p *idleWorkerTracker) IdleStats(workerNo int) (time.Time, bool) {
-	p.Lock()
-	defer p.Unlock()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	time, isIdle := p.idleMap[workerNo]
 	return time, isIdle
 }
@@ -69,13 +69,13 @@ func newIdleWorkerTracker() idleWorkerTracker {
 }
 
 type urlTracker struct {
-	sync.Mutex
+	mutex sync.Mutex
 	urlsSeen   map[string]bool
 	urlsToWork chan string
 }
 
 func (v *urlTracker) appendURL(url string) {
-	v.Lock()
+	v.mutex.Lock()
 	_, seen := v.urlsSeen[url]
 	if !seen {
 		// if workers aren't keeping up with the number of links we have seen things will deadlock
@@ -86,7 +86,7 @@ func (v *urlTracker) appendURL(url string) {
 		}()
 		v.urlsSeen[url] = true
 	}
-	v.Unlock()
+	v.mutex.Unlock()
 }
 
 func newURLTracker(startingURL string, urlsToWork chan string) urlTracker {

@@ -47,9 +47,9 @@ func main() {
 		panic(err)
 	}
 	for u, links := range res {
-		println(fmt.Sprintf("Links for %s", u))
+		fmt.Fprintf(os.Stdout, "Links for %s\n", u)
 		for _, l := range links {
-			println(fmt.Sprintf("\t%s: %s", l.LinkType, l.LinkTarget))
+			fmt.Fprintf(os.Stdout, "\t%s: %s\n", l.LinkType, l.LinkTarget)
 		}
 	}
 	os.Exit(0)
