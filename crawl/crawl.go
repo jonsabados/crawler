@@ -29,6 +29,24 @@ func (l LinkType) String() string {
 	}
 }
 
+func (l LinkType) linkAttr() string {
+	if l == LinkTypeA {
+		return "href"
+	} else {
+		return "src"
+	}
+}
+
+func parseLinkType(tag string) LinkType {
+	if tag == "a" {
+		return LinkTypeA
+	} else if tag == "img" {
+		return LinkTypeImg
+	} else {
+		panic(fmt.Sprintf("unknown link type %s", tag))
+	}
+}
+
 type Link struct {
 	LinkType   LinkType
 	LinkTarget string
@@ -37,7 +55,7 @@ type Link struct {
 // parseLinks looks for html links in an io stream. It tries to continue on any errors as if nothing was wrong until
 // it encounters the end of the io stream (assuming a logger is setup on the context passed in errors will be logged
 // at a warn level though).
-func parseLinks(ctx context.Context, r io.Reader) []Link {
+func parseLinks(ctx context.Context, source *url.URL, r io.Reader) []Link {
 	t := html.NewTokenizer(r)
 	ret := make([]Link, 0)
 	processing := true
@@ -54,41 +72,47 @@ func parseLinks(ctx context.Context, r io.Reader) []Link {
 		}
 
 		if tt == html.StartTagToken || tt == html.SelfClosingTagToken {
-			ret = processElement(t, ret)
+			ret = processElement(ctx, source, t, ret)
 		}
 	}
 	return ret
 }
 
-func processElement(t *html.Tokenizer, ret []Link) []Link {
+func processElement(ctx context.Context, source *url.URL, t *html.Tokenizer, existingLinks []Link) []Link {
 	tagNameBytes, hasMoreAttrs := t.TagName()
 	tagName := string(tagNameBytes)
-	if tagName == "a" {
+
+	if tagName == "a" || tagName == "img" {
+		linkType := parseLinkType(tagName)
 		for hasMoreAttrs {
 			var attr []byte
 			var val []byte
 			attr, val, hasMoreAttrs = t.TagAttr()
-			if string(attr) == "href" {
-				ret = append(ret, Link{
-					LinkType:   LinkTypeA,
-					LinkTarget: string(val),
-				})
-			}
-		}
-	} else if tagName == "img" {
-		for hasMoreAttrs {
-			var attr []byte
-			var val []byte
-			attr, val, hasMoreAttrs = t.TagAttr()
-			if string(attr) == "src" {
-				ret = append(ret, Link{
-					LinkType:   LinkTypeImg,
-					LinkTarget: string(val),
-				})
+			if string(attr) == linkType.linkAttr() {
+				target, err := linkTarget(source, string(val))
+				if err  != nil {
+					zerolog.Ctx(ctx).Warn().Err(err).Msg("error parsing link target")
+				} else {
+					existingLinks = append(existingLinks, Link{
+						LinkType:   linkType,
+						LinkTarget: target,
+					})
+				}
 			}
 		}
 	}
-	return ret
+	return existingLinks
+}
+
+func linkTarget(source *url.URL, href string) (string, error) {
+	if strings.HasPrefix(href, "mailto:") || strings.HasPrefix(href, "http://") || strings.HasPrefix(href,"https://") {
+		return href, nil
+	}
+	relative, err := url.Parse(href)
+	if err != nil {
+		return "", nil
+	}
+	return source.ResolveReference(relative).String(), nil
 }
 
 // DocumentReader reads all links from a URL. Create one with NewDocumentFetcher
@@ -108,7 +132,7 @@ func ReadDocument(ctx context.Context, url string) (links []Link, err error) {
 	}
 	defer res.Body.Close()
 	zerolog.Ctx(ctx).Debug().Str("url", url).Msg("extracting urls")
-	ret := parseLinks(ctx, res.Body)
+	ret := parseLinks(ctx, req.URL, res.Body)
 	zerolog.Ctx(ctx).Debug().Str("url", url).Msg("done extracting urls")
 	return ret, nil
 }

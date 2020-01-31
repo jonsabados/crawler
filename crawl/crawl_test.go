@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -40,7 +41,15 @@ func Test_parseLinks(t *testing.T) {
 				},
 				{
 					LinkTypeA,
+					"http://foo.bar.com/noproto",
+				},
+				{
+					LinkTypeA,
 					"mailto:someemail@foo.bar.com",
+				},
+				{
+					LinkTypeA,
+					"http://foo.bar.com/blah.html",
 				},
 				{
 					LinkTypeA,
@@ -78,10 +87,12 @@ func Test_parseLinks(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			asserter := assert.New(t)
+			origin, err := url.Parse("http://foo.bar.com/blah/wee.html")
+			asserter.NoError(err)
 			in, err := os.Open(tc.input)
 			if asserter.NoError(err) {
 				defer in.Close()
-				res := parseLinks(context.Background(), in)
+				res := parseLinks(context.Background(), origin, in)
 				asserter.Equal(tc.expectedResult, res)
 			}
 		})
@@ -118,7 +129,7 @@ func Test_ReadDocument_HappyPath(t *testing.T) {
 	defer ts.Close()
 
 	ctx := context.Background()
-	res, err := ReadDocument(ctx, ts.URL)
+	res, err := ReadDocument(ctx, fmt.Sprintf("%s/foo/bar.html", ts.URL))
 	asserter.Equal([]Link{
 		{
 			LinkTypeA,
@@ -134,7 +145,15 @@ func Test_ReadDocument_HappyPath(t *testing.T) {
 		},
 		{
 			LinkTypeA,
+			"http://foo.bar.com/noproto",
+		},
+		{
+			LinkTypeA,
 			"mailto:someemail@foo.bar.com",
+		},
+		{
+			LinkTypeA,
+			fmt.Sprintf("%s/blah.html", ts.URL),
 		},
 		{
 			LinkTypeA,
@@ -142,7 +161,7 @@ func Test_ReadDocument_HappyPath(t *testing.T) {
 		},
 		{
 			LinkTypeImg,
-			"http://foo.bar.com/somimage",
+			fmt.Sprintf("%s/somimage", ts.URL),
 		},
 	}, res)
 	asserter.NoError(err)
