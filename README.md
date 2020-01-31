@@ -61,10 +61,9 @@ are pretty straight forward: fire up a channel to feed work into, create a wait 
 and then fire up your worker routines that call .Done() on the wait group when complete and then just wait for those to
 finish - ideally they can just dump work output into another channel that has a listener on it building up results.
 
-This quickly blew up though, since the workers were also the work producers. After getting a kinda long but functional
-thing together and tested I ended up banging my head on the wall troubleshooting a deadlock that turned out to be workers
-blocking on publishing to the work que that they were consuming from. Normally I like code to be on the self documenting
-side, but these complications led to code that very much so needed to be heavily commented.
+This quickly blew up though, since the workers were also the work producers. This did add a little bit of complexity,
+and code that isn't quite as self documenting as I would like but I believe the performance improvement to be worth the
+cost.
 
 ## areas for improvement
 
@@ -77,10 +76,9 @@ side, but these complications led to code that very much so needed to be heavily
  bother to check the content type before processing it. If someone did do a link to something that caused the html parser
  to barf it'll just keep on trucking but seems like the type of thing that would be include in enhanced error reporting
  * log level could be made into an argument or read from an environmental variable
- * idle worker pool monitoring stuff could probably be extracted to deal with waiting on workers to finish when they
- might be producing their own work. the crawl function is very much so larger than I would like, and it very much so 
- feels like the type of thing that could be extracted into something a bit more reusable. But, without a second use case
- that refactoring probably isn't worth the squeeze (it may make it a bit more readable so it could be worth chasing if 
- deadlines aren't an issue). I did think about just extracting functions in it, but there is an unfortunate amount of
- shared state to pass around so felt that doing those extractions wouldn't make anywhere nearly as much sense as doing
- the proper reusable extraction thing.
+ * idle worker pool monitoring stuff could probably be worked out a bit more and become truly reusable (this would also
+ help with the length of the crawl function). That said I started on teasing that out a bit for readability and believe
+ its in a good spot to suck out into a truly reusable and directly tested piece in the event a second use case comes up.
+ its hard to say 100% without that use case, but I believe giving it some sort of worker factory property that is passed
+ on creation would be the start of that. The various receiver functions for the `idleWorkerTracker` are exported
+ because of this line of thought.

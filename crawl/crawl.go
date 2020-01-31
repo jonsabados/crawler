@@ -143,22 +143,15 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 		ret := make(map[string][]Link)
 		retLock := sync.Mutex{}
 
-		urlsSeen := map[string]bool{
-			startingURL: true,
-		}
-		urlsLock := sync.Mutex{}
-
 		urlsToProcess := make(chan string, workerCount)
+		urlsSeen := newURLTracker(startingURL, urlsToProcess)
 
 		// we cant just use a wait group since workers are also feeding work. There may be a better way wait for them
 		// to all be done, but just waiting for them to be idle for .5 seconds seems like a good-enough solution for
 		// the current use case. It could also be feed with a chanel removing the need for another lock, but the
 		// additional lock seems more simple than a separate go routine limiting to the channel and so on.
 		idleThreshold := time.Millisecond * 500
-		idleMap := make(map[int]time.Time)
-		// there will be one guy only doing read operations on this, but since there is only one reader and all other
-		// things accessing it will write doing a RWLock wouldn't do much more than add complexity.
-		idleMapLock := sync.Mutex{}
+		idleMap := newIdleWorkerTracker()
 
 		startWorker := func(workerNo int) {
 			baseLogger.Info().Int("worker", workerNo).Msg("starting worker")
@@ -168,9 +161,7 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 				ctx := localLogger.WithContext(context.Background())
 
 				for u := range urlsToProcess {
-					idleMapLock.Lock()
-					delete(idleMap, workerNo)
-					idleMapLock.Unlock()
+					idleMap.MarkBusy(workerNo)
 
 					localLogger.Info().Str("startingURL", u).Msg("processing startingURL")
 					// theoretically we could try to tie into stopSignal here and call the cancel function if its sent
@@ -195,77 +186,31 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 							}
 							localLogger.Debug().Str("url", link.LinkTarget).Msg("checking url for inclusion")
 							if shouldIncludeURL(link.LinkTarget) {
-								urlsLock.Lock()
-								_, seen := urlsSeen[link.LinkTarget]
-								if !seen {
-									// if workers aren't keeping up with the number of links we have seen things will deadlock
-									// so just do that in a separate goroutine. l can also be changed so it needs to be
-									// an argument to the func were invoking rather than just doing urlsToProcess <- l
-									go func(toAdd string) {
-										urlsToProcess <- toAdd
-									}(link.LinkTarget)
-									urlsSeen[link.LinkTarget] = true
-								}
-								urlsLock.Unlock()
+								urlsSeen.appendURL(link.LinkTarget)
 							}
 						}
 					}
 					localLogger.Debug().Msg("marking idle")
-					idleMapLock.Lock()
-					idleMap[workerNo] = time.Now()
-					idleMapLock.Unlock()
+					idleMap.MarkIdle(workerNo)
 				}
 			}()
 		}
 
-		// fire up our workers - not just doing an arg-less go func() inline since i is gonna change immediately
+		// fire up our workers
 		for i := 0; i < workerCount; i++ {
-			idleMap[i] = time.Now()
+			idleMap.MarkIdle(i)
 			startWorker(i)
 		}
 
 		urlsToProcess <- startingURL
-
-		workersIdle := make(chan bool)
-		stopWorkerWatcherSignal := make(chan bool)
-		// this guy is going to monitor the idle map and see if all workers have been idle for > our idle threshold
-		// then if so send the signal to bail
-		go func() {
-			ticker := time.NewTicker(time.Millisecond * 10)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					allDone := true
-					for i := 0; i < workerCount; i++ {
-						idleMapLock.Lock()
-						idleTime, isIdle := idleMap[i]
-						idleMapLock.Unlock()
-						if !isIdle {
-							// worker is active
-							allDone = false
-						} else if time.Now().Sub(idleTime) < idleThreshold {
-							// worker is idle, but not long enough
-							allDone = false
-						}
-					}
-					if allDone {
-						workersIdle <- true
-						return
-					}
-				case <-stopWorkerWatcherSignal:
-					return
-				}
-			}
-		}()
+		complete, cancel := idleMap.Await(workerCount, idleThreshold)
 
 		select {
-		case <-workersIdle:
-			// happy path, all workers are idle
+		case <-complete:
 			close(urlsToProcess)
 		case <-stopSignal:
 			close(urlsToProcess)
-			stopWorkerWatcherSignal <- true
+			cancel <- true
 			return nil, errors.New("execution terminated")
 		}
 
