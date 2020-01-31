@@ -187,7 +187,7 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 				for u := range urlsToProcess {
 					idleMap.MarkBusy(workerNo)
 
-					localLogger.Info().Str("startingURL", u).Msg("processing startingURL")
+					localLogger.Info().Str("startingURL", u).Msg("processing url")
 					// theoretically we could try to tie into stopSignal here and call the cancel function if its sent
 					// but it would add a chunk of complexity since it would need to fan out and we already
 					// set a timeout so -meh-
