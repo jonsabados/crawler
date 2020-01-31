@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -21,27 +20,58 @@ func Test_parseLinks(t *testing.T) {
 	testCases := []struct {
 		desc           string
 		input          string
-		expectedResult []string
+		expectedResult []Link
 	}{
 		{
 			"valid html",
 			"testresources/valid.html",
-			[]string{
-				"http://foo.bar.com/icky_whitespace",
-				"http://foo.bar.com/nice_link",
-				"http://foo.bar.com/CasingFun",
-				"mailto:someemail@foo.bar.com",
-				"http://foo.bar.com/img",
+			[]Link{
+				{
+					LinkTypeA,
+					"http://foo.bar.com/icky_whitespace",
+				},
+				{
+					LinkTypeA,
+					"http://foo.bar.com/nice_link",
+				},
+				{
+					LinkTypeA,
+					"http://foo.bar.com/CasingFun",
+				},
+				{
+					LinkTypeA,
+					"mailto:someemail@foo.bar.com",
+				},
+				{
+					LinkTypeA,
+					"http://foo.bar.com/img",
+				},
+				{
+					LinkTypeImg,
+					"http://foo.bar.com/somimage",
+				},
 			},
 		},
 		{
 			"invalid html",
 			"testresources/invalid.html",
-			[]string{
-				"http://foo.bar.com/icky_whitespace",
-				"http://foo.bar.com/nice_link",
-				"http://foo.bar.com/CasingFun",
-				"mailto:someemail@foo.bar.com",
+			[]Link{
+				Link{
+					LinkTypeA,
+					"http://foo.bar.com/icky_whitespace",
+				},
+				{
+					LinkTypeA,
+					"http://foo.bar.com/nice_link",
+				},
+				{
+					LinkTypeA,
+					"http://foo.bar.com/CasingFun",
+				},
+				{
+					LinkTypeA,
+					"mailto:someemail@foo.bar.com",
+				},
 			},
 		},
 	}
@@ -89,12 +119,31 @@ func Test_ReadDocument_HappyPath(t *testing.T) {
 
 	ctx := context.Background()
 	res, err := ReadDocument(ctx, ts.URL)
-	asserter.Equal([]string{
-		"http://foo.bar.com/icky_whitespace",
-		"http://foo.bar.com/nice_link",
-		"http://foo.bar.com/CasingFun",
-		"mailto:someemail@foo.bar.com",
-		"http://foo.bar.com/img",
+	asserter.Equal([]Link{
+		{
+			LinkTypeA,
+			"http://foo.bar.com/icky_whitespace",
+		},
+		{
+			LinkTypeA,
+			"http://foo.bar.com/nice_link",
+		},
+		{
+			LinkTypeA,
+			"http://foo.bar.com/CasingFun",
+		},
+		{
+			LinkTypeA,
+			"mailto:someemail@foo.bar.com",
+		},
+		{
+			LinkTypeA,
+			"http://foo.bar.com/img",
+		},
+		{
+			LinkTypeImg,
+			"http://foo.bar.com/somimage",
+		},
 	}, res)
 	asserter.NoError(err)
 }
@@ -187,39 +236,40 @@ func Test_NewCrawler_HappyPath(t *testing.T) {
 	logger := zerolog.New(os.Stdout).Level(zerolog.Disabled)
 
 	// note - need more links than workers to make sure we don't end up blocking when publishing to the work queue
-	linkStructure := map[string][]string{
+	linkStructure := map[string][]Link{
 		"start": {
-			"A",
-			"B",
-			"D",
-			"E",
-			"F",
-			"G",
-			"H",
-			"I",
-			"J",
-			"K",
-			"L",
-			"start",
+			{LinkTypeA, "A"},
+			{LinkTypeA, "B"},
+			{LinkTypeA, "D"},
+			{LinkTypeA, "E"},
+			{LinkTypeA, "F"},
+			{LinkTypeA, "G"},
+			{LinkTypeA, "H"},
+			{LinkTypeA, "I"},
+			{LinkTypeA, "J"},
+			{LinkTypeA, "K"},
+			{LinkTypeA, "L"},
+			{LinkTypeImg, "IMG"},
+			{LinkTypeA, "start"},
 		},
 		"A": {
-			"B",
-			"C",
-			"Z",
-			"start",
+			{LinkTypeA, "B"},
+			{LinkTypeA, "C"},
+			{LinkTypeA, "Z"},
+			{LinkTypeA, "start"},
 		},
 		"B": {
-			"C",
-			"W",
+			{LinkTypeA, "C"},
+			{LinkTypeA, "W"},
 		},
 		"C": {
-			"A",
+			{LinkTypeA, "A"},
 		},
 	}
 
 	dupeRead := make(map[string]bool)
 	dupeReadLock := sync.Mutex{}
-	reader := func(ctx context.Context, url string) ([]string, error) {
+	reader := func(ctx context.Context, url string) ([]Link, error) {
 		dupeReadLock.Lock()
 		_, alreadyDone := dupeRead[url]
 		if alreadyDone {
@@ -253,24 +303,7 @@ func Test_NewCrawler_HappyPath(t *testing.T) {
 	go func() {
 		res, err := crawl("start")
 		if asserter.NoError(err) {
-			sort.Strings(res)
-			// note - W shouldn't appear due to not matching our inclusion predicate
-			asserter.Equal([]string{
-				"A",
-				"B",
-				"C",
-				"D",
-				"E",
-				"F",
-				"G",
-				"H",
-				"I",
-				"J",
-				"K",
-				"L",
-				"Z",
-				"start",
-			}, res)
+			asserter.Equal(linkStructure, res)
 			done <- true
 		}
 	}()
@@ -288,16 +321,16 @@ func Test_NewCrawler_Shutdown(t *testing.T) {
 
 	logger := zerolog.New(os.Stdout).Level(zerolog.Disabled)
 
-	reader := func(ctx context.Context, url string) ([]string, error) {
+	reader := func(ctx context.Context, url string) ([]Link, error) {
 		time.Sleep(time.Second * 2)
-		return []string{}, nil
+		return []Link{}, nil
 	}
 
 	shouldIncludeMock := func(s string) bool {
 		return s != "W"
 	}
 
-	crawl, stop := NewCrawler(logger, 10, time.Second * 3, reader, shouldIncludeMock)
+	crawl, stop := NewCrawler(logger, 10, time.Second*3, reader, shouldIncludeMock)
 
 	timedOut := make(chan bool)
 	go func() {

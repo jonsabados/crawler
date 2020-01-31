@@ -14,12 +14,32 @@ import (
 	"time"
 )
 
+type LinkType int
+
+const (
+	LinkTypeA   LinkType = iota
+	LinkTypeImg LinkType = iota
+)
+
+func (l LinkType) String() string {
+	if l == LinkTypeA {
+		return "hyperlink"
+	} else {
+		return "resource"
+	}
+}
+
+type Link struct {
+	LinkType   LinkType
+	LinkTarget string
+}
+
 // parseLinks looks for html links in an io stream. It tries to continue on any errors as if nothing was wrong until
 // it encounters the end of the io stream (assuming a logger is setup on the context passed in errors will be logged
 // at a warn level though).
-func parseLinks(ctx context.Context, r io.Reader) []string {
+func parseLinks(ctx context.Context, r io.Reader) []Link {
 	t := html.NewTokenizer(r)
-	ret := make([]string, 0)
+	ret := make([]Link, 0)
 	processing := true
 	for processing {
 		tt := t.Next()
@@ -33,17 +53,38 @@ func parseLinks(ctx context.Context, r io.Reader) []string {
 			}
 		}
 
-		if tt == html.StartTagToken {
-			tagName, hasMoreAttrs := t.TagName()
-			if string(tagName) == "a" {
-				for hasMoreAttrs {
-					var attr []byte
-					var val []byte
-					attr, val, hasMoreAttrs = t.TagAttr()
-					if string(attr) == "href" {
-						ret = append(ret, string(val))
-					}
-				}
+		if tt == html.StartTagToken || tt == html.SelfClosingTagToken {
+			ret = processElement(t, ret)
+		}
+	}
+	return ret
+}
+
+func processElement(t *html.Tokenizer, ret []Link) []Link {
+	tagNameBytes, hasMoreAttrs := t.TagName()
+	tagName := string(tagNameBytes)
+	if tagName == "a" {
+		for hasMoreAttrs {
+			var attr []byte
+			var val []byte
+			attr, val, hasMoreAttrs = t.TagAttr()
+			if string(attr) == "href" {
+				ret = append(ret, Link{
+					LinkType:   LinkTypeA,
+					LinkTarget: string(val),
+				})
+			}
+		}
+	} else if tagName == "img" {
+		for hasMoreAttrs {
+			var attr []byte
+			var val []byte
+			attr, val, hasMoreAttrs = t.TagAttr()
+			if string(attr) == "src" {
+				ret = append(ret, Link{
+					LinkType:   LinkTypeImg,
+					LinkTarget: string(val),
+				})
 			}
 		}
 	}
@@ -51,10 +92,10 @@ func parseLinks(ctx context.Context, r io.Reader) []string {
 }
 
 // DocumentReader reads all links from a URL. Create one with NewDocumentFetcher
-type DocumentReader func(ctx context.Context, url string) ([]string, error)
+type DocumentReader func(ctx context.Context, url string) (links []Link, err error)
 
 // ReadDocument is the non-test implementation of DocumentReader
-func ReadDocument(ctx context.Context, url string) (strings []string, err error) {
+func ReadDocument(ctx context.Context, url string) (links []Link, err error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -91,15 +132,19 @@ func SameDomainEligibilityChecker(sourceURL string) URLEligibilityChecker {
 	}
 }
 
-type Crawler func(url string) ([]string, error)
+type Crawler func(url string) (map[string][]Link, error)
 
 // NewCrawler returns a crawler and channel that can be used to shut it down
 func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Duration, extractLinks DocumentReader, shouldIncludeURL URLEligibilityChecker) (Crawler, chan bool) {
 	stopSignal := make(chan bool)
-	return func(url string) ([]string, error) {
-		baseLogger.Debug().Str("url", url).Msg("starting crawl")
+	return func(startingURL string) (map[string][]Link, error) {
+		baseLogger.Debug().Str("startingURL", startingURL).Msg("starting crawl")
+
+		ret := make(map[string][]Link)
+		retLock := sync.Mutex{}
+
 		urlsSeen := map[string]bool{
-			url: true,
+			startingURL: true,
 		}
 		urlsLock := sync.Mutex{}
 
@@ -127,31 +172,39 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 					delete(idleMap, workerNo)
 					idleMapLock.Unlock()
 
-					localLogger.Info().Str("url", u).Msg("processing url")
+					localLogger.Info().Str("startingURL", u).Msg("processing startingURL")
 					// theoretically we could try to tie into stopSignal here and call the cancel function if its sent
 					// but it would add a chunk of complexity since it would need to fan out and we already
 					// set a timeout so -meh-
 					readCtx, _ := context.WithTimeout(ctx, readTimeout)
 					docLinks, err := extractLinks(readCtx, u)
+
 					localLogger.Debug().Str("url", u).Msg("extracted links from url")
 					if err != nil {
 						// if we decorated the error with a stack it needs to go through fmt with a +v to spit the stack
 						// out, so no using .Err(err) here
 						localLogger.Warn().Str("error", fmt.Sprintf("%+v", err)).Str("url", u).Msg("error reading url")
 					} else {
-						for _, l := range docLinks {
-							localLogger.Debug().Str("url", l).Msg("checking url for inclusion")
-							if shouldIncludeURL(l) {
+						retLock.Lock()
+						ret[u] = docLinks
+						retLock.Unlock()
+
+						for _, link := range docLinks {
+							if link.LinkType != LinkTypeA {
+								continue
+							}
+							localLogger.Debug().Str("url", link.LinkTarget).Msg("checking url for inclusion")
+							if shouldIncludeURL(link.LinkTarget) {
 								urlsLock.Lock()
-								_, seen := urlsSeen[l]
+								_, seen := urlsSeen[link.LinkTarget]
 								if !seen {
 									// if workers aren't keeping up with the number of links we have seen things will deadlock
 									// so just do that in a separate goroutine. l can also be changed so it needs to be
 									// an argument to the func were invoking rather than just doing urlsToProcess <- l
 									go func(toAdd string) {
 										urlsToProcess <- toAdd
-									}(l)
-									urlsSeen[l] = true
+									}(link.LinkTarget)
+									urlsSeen[link.LinkTarget] = true
 								}
 								urlsLock.Unlock()
 							}
@@ -171,7 +224,7 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 			startWorker(i)
 		}
 
-		urlsToProcess <- url
+		urlsToProcess <- startingURL
 
 		workersIdle := make(chan bool)
 		stopWorkerWatcherSignal := make(chan bool)
@@ -216,10 +269,6 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 			return nil, errors.New("execution terminated")
 		}
 
-		ret := make([]string, 0)
-		for u := range urlsSeen {
-			ret = append(ret, u)
-		}
 		return ret, nil
 	}, stopSignal
 }

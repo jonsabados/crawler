@@ -46,8 +46,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	for _, url := range res {
-		println(fmt.Sprintf("URL present on site: %s", url))
+	for u, links := range res {
+		println(fmt.Sprintf("Links for %s", u))
+		for _, l := range links {
+			println(fmt.Sprintf("\t%s: %s", l.LinkType, l.LinkTarget))
+		}
 	}
 	os.Exit(0)
 }
