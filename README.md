@@ -76,9 +76,10 @@ cost.
  bother to check the content type before processing it. If someone did do a link to something that caused the html parser
  to barf it'll just keep on trucking but seems like the type of thing that would be include in enhanced error reporting
  * log level could be made into an argument or read from an environmental variable
- * idle worker pool monitoring stuff could probably be worked out a bit more and become truly reusable (this would also
+ * ~~idle worker pool monitoring stuff could probably be worked out a bit more and become truly reusable (this would also
  help with the length of the crawl function). That said I started on teasing that out a bit for readability and believe
  its in a good spot to suck out into a truly reusable and directly tested piece in the event a second use case comes up.
  its hard to say 100% without that use case, but I believe giving it some sort of worker factory property that is passed
  on creation would be the start of that. The various receiver functions for the `idleWorkerTracker` are exported
- because of this line of thought.
+ because of this line of thought.~~ Update: There are better ways to go about this, the 
+ [take_two](https://github.com/jonsabados/crawler/tree/take_two) branch has a much better implementation.
