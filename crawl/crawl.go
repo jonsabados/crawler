@@ -90,7 +90,7 @@ func processElement(ctx context.Context, source *url.URL, t *html.Tokenizer, exi
 			attr, val, hasMoreAttrs = t.TagAttr()
 			if string(attr) == linkType.linkAttr() {
 				target, err := linkTarget(source, string(val))
-				if err  != nil {
+				if err != nil {
 					zerolog.Ctx(ctx).Warn().Err(err).Msg("error parsing link target")
 				} else {
 					existingLinks = append(existingLinks, Link{
@@ -105,7 +105,7 @@ func processElement(ctx context.Context, source *url.URL, t *html.Tokenizer, exi
 }
 
 func linkTarget(source *url.URL, href string) (string, error) {
-	if strings.HasPrefix(href, "mailto:") || strings.HasPrefix(href, "http://") || strings.HasPrefix(href,"https://") {
+	if strings.HasPrefix(href, "mailto:") || strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") {
 		return href, nil
 	}
 	relative, err := url.Parse(href)
@@ -120,6 +120,7 @@ type DocumentReader func(ctx context.Context, url string) (links []Link, err err
 
 // ReadDocument is the non-test implementation of DocumentReader
 func ReadDocument(ctx context.Context, url string) (links []Link, err error) {
+	zerolog.Ctx(ctx).Info().Str("url", url).Msg("reading url")
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -156,88 +157,58 @@ func SameDomainEligibilityChecker(sourceURL string) URLEligibilityChecker {
 	}
 }
 
+func crawl(ctx context.Context, url string, workers *workerPool, shouldCrawlURL URLEligibilityChecker, urlsSeen *visitedURLTracker, siteMap *siteMap) error {
+	stop := ctx.Done()
+	s, e := workers.queueRead(url)
+	select {
+	case <-stop:
+		return errors.New("context cancelled")
+	case res := <-s:
+		siteMap.addURL(url, res)
+		linksToCrawl := make([]string, 0)
+		for _, l := range res {
+			if l.LinkType == LinkTypeA && shouldCrawlURL(l.LinkTarget) && !urlsSeen.hasURLBeenSeenPreviously(l.LinkTarget) {
+				linksToCrawl = append(linksToCrawl, l.LinkTarget)
+			}
+		}
+		if len(linksToCrawl)  > 0 {
+			wg := sync.WaitGroup{}
+			for _, l := range linksToCrawl {
+				wg.Add(1)
+				go func(url string) {
+					_ = crawl(ctx, url, workers, shouldCrawlURL, urlsSeen, siteMap)
+					wg.Done()
+				}(l)
+			}
+			wg.Wait()
+		}
+	case err := <-e:
+		zerolog.Ctx(ctx).Err(err).Str("url", url).Msg("error reading URL")
+		return err
+	}
+	return nil
+}
+
 type Crawler func(url string) (map[string][]Link, error)
 
-// NewCrawler returns a crawler and channel that can be used to shut it down
-func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Duration, extractLinks DocumentReader, shouldIncludeURL URLEligibilityChecker) (Crawler, chan bool) {
-	stopSignal := make(chan bool)
+// NewCrawler returns a crawler and function that can be used to shut it down
+func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Duration, extractLinks DocumentReader, shouldCrawlURL URLEligibilityChecker) (Crawler, func()) {
+	ctx := context.Background()
+	ctx = baseLogger.WithContext(ctx)
+	ctx, stop := context.WithCancel(ctx)
+
 	return func(startingURL string) (map[string][]Link, error) {
 		baseLogger.Debug().Str("startingURL", startingURL).Msg("starting crawl")
 
-		ret := make(map[string][]Link)
-		retLock := sync.Mutex{}
+		siteMap := siteMap{}
+		urlsSeen := newURLTracker(startingURL)
 
-		urlsToProcess := make(chan string, workerCount)
-		urlsSeen := newURLTracker(startingURL, urlsToProcess)
+		workers := workerPool{}
+		stopWorkers := workers.startWorkerPool(ctx, extractLinks, readTimeout, workerCount)
+		defer stopWorkers()
 
-		// we cant just use a wait group since workers are also feeding work. There may be a better way wait for them
-		// to all be done, but just waiting for them to be idle for .5 seconds seems like a good-enough solution for
-		// the current use case. It could also be feed with a chanel removing the need for another lock, but the
-		// additional lock seems more simple than a separate go routine limiting to the channel and so on.
-		idleThreshold := time.Millisecond * 500
-		idleMap := newIdleWorkerTracker()
+		err := crawl(ctx, startingURL, &workers, shouldCrawlURL, &urlsSeen, &siteMap)
 
-		startWorker := func(workerNo int) {
-			baseLogger.Info().Int("worker", workerNo).Msg("starting worker")
-
-			go func() {
-				localLogger := baseLogger.With().Int("worker", workerNo).Logger()
-				ctx := localLogger.WithContext(context.Background())
-
-				for u := range urlsToProcess {
-					idleMap.MarkBusy(workerNo)
-
-					localLogger.Info().Str("startingURL", u).Msg("processing url")
-					// theoretically we could try to tie into stopSignal here and call the cancel function if its sent
-					// but it would add a chunk of complexity since it would need to fan out and we already
-					// set a timeout so -meh-
-					readCtx, _ := context.WithTimeout(ctx, readTimeout)
-					docLinks, err := extractLinks(readCtx, u)
-
-					localLogger.Debug().Str("url", u).Msg("extracted links from url")
-					if err != nil {
-						// if we decorated the error with a stack it needs to go through fmt with a +v to spit the stack
-						// out, so no using .Err(err) here
-						localLogger.Warn().Str("error", fmt.Sprintf("%+v", err)).Str("url", u).Msg("error reading url")
-					} else {
-						retLock.Lock()
-						ret[u] = docLinks
-						retLock.Unlock()
-
-						for _, link := range docLinks {
-							if link.LinkType != LinkTypeA {
-								continue
-							}
-							localLogger.Debug().Str("url", link.LinkTarget).Msg("checking url for inclusion")
-							if shouldIncludeURL(link.LinkTarget) {
-								urlsSeen.appendURL(link.LinkTarget)
-							}
-						}
-					}
-					localLogger.Debug().Msg("marking idle")
-					idleMap.MarkIdle(workerNo)
-				}
-			}()
-		}
-
-		// fire up our workers
-		for i := 0; i < workerCount; i++ {
-			idleMap.MarkIdle(i)
-			startWorker(i)
-		}
-
-		urlsToProcess <- startingURL
-		complete, cancel := idleMap.Await(workerCount, idleThreshold)
-
-		select {
-		case <-complete:
-			close(urlsToProcess)
-		case <-stopSignal:
-			close(urlsToProcess)
-			cancel <- true
-			return nil, errors.New("execution terminated")
-		}
-
-		return ret, nil
-	}, stopSignal
+		return siteMap.siteMap, err
+	}, stop
 }

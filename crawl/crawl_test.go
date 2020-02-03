@@ -364,7 +364,7 @@ func Test_NewCrawler_Shutdown(t *testing.T) {
 		done <- true
 	}()
 
-	stop <- true
+	stop()
 
 	select {
 	case <-timedOut:

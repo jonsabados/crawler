@@ -39,7 +39,7 @@ func main() {
 
 	go func() {
 		time.Sleep(time.Duration(*executionTimeout) * time.Second)
-		stop <- true
+		stop()
 	}()
 
 	res, err := crawler(*startingURL)
