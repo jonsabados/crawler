@@ -18,17 +18,17 @@ type workerPool struct {
 }
 
 func (w *workerPool) startWorkerPool(ctx context.Context, readDocument DocumentReader, readTimeout time.Duration, workerCount int) func() {
-	stopSignals := make([]chan bool, 0)
 	w.workQueue = make(chan workRequest)
 
 	startWorker := func(workerNo int) {
-		stop := make(chan bool)
-		stopSignals = append(stopSignals, stop)
-
 		go func() {
 			for {
 				select {
 				case w := <-w.workQueue:
+					if w.url == "" {
+						// workQueue was closed
+						continue
+					}
 					logger := zerolog.Ctx(ctx).With().Int("worker", workerNo).Logger()
 					localCtx := logger.WithContext(ctx)
 					localCtx, _ = context.WithTimeout(localCtx, readTimeout)
@@ -39,8 +39,6 @@ func (w *workerPool) startWorkerPool(ctx context.Context, readDocument DocumentR
 					} else {
 						w.complete <- res
 					}
-				case <-stop:
-					return
 				}
 			}
 		}()
@@ -51,9 +49,7 @@ func (w *workerPool) startWorkerPool(ctx context.Context, readDocument DocumentR
 	}
 
 	stop := func() {
-		for _, stop := range stopSignals {
-			stop <- true
-		}
+		close(w.workQueue)
 	}
 	return stop
 }

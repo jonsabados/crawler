@@ -162,7 +162,7 @@ func crawl(ctx context.Context, url string, workers *workerPool, shouldCrawlURL 
 	s, e := workers.queueRead(url)
 	select {
 	case <-stop:
-		return errors.New("context cancelled")
+		return errors.New("execution terminated")
 	case res := <-s:
 		siteMap.addURL(url, res)
 		linksToCrawl := make([]string, 0)
@@ -208,7 +208,6 @@ func NewCrawler(baseLogger zerolog.Logger, workerCount int, readTimeout time.Dur
 		defer stopWorkers()
 
 		err := crawl(ctx, startingURL, &workers, shouldCrawlURL, &urlsSeen, &siteMap)
-
 		return siteMap.siteMap, err
 	}, stop
 }
