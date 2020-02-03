@@ -61,9 +61,11 @@ are pretty straight forward: fire up a channel to feed work into, create a wait 
 and then fire up your worker routines that call .Done() on the wait group when complete and then just wait for those to
 finish - ideally they can just dump work output into another channel that has a listener on it building up results.
 
-This quickly blew up though, since the workers were also the work producers. This did add a little bit of complexity,
-and code that isn't quite as self documenting as I would like but I believe the performance improvement to be worth the
-cost.
+This quickly blew up though, since the workers were also the work producers. The initial version of this relied on 
+waiting for all workers in a worker pool to be idle, which just felt wrong. This version does a more standard recursive
+crawl function, but with subsequent calls in separate go routines allowing for straight forward use of wait groups
+to wait for nested call completion (this would also allow for depth tracking). This also allows for a more straight 
+forward worker pool to execute those requests (this allows for control over the # of concurrent requests being made)
 
 ## areas for improvement
 
@@ -76,9 +78,3 @@ cost.
  bother to check the content type before processing it. If someone did do a link to something that caused the html parser
  to barf it'll just keep on trucking but seems like the type of thing that would be include in enhanced error reporting
  * log level could be made into an argument or read from an environmental variable
- * idle worker pool monitoring stuff could probably be worked out a bit more and become truly reusable (this would also
- help with the length of the crawl function). That said I started on teasing that out a bit for readability and believe
- its in a good spot to suck out into a truly reusable and directly tested piece in the event a second use case comes up.
- its hard to say 100% without that use case, but I believe giving it some sort of worker factory property that is passed
- on creation would be the start of that. The various receiver functions for the `idleWorkerTracker` are exported
- because of this line of thought.
